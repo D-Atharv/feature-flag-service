@@ -45,10 +45,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Pinned to match local dev; @latest could fail CI with no code change.
+      # Prebuilt binary, not `go install` — that compiled ~150 deps from
+      # source and was the single slowest step (~1m of a ~4m job).
       - name: Install lint tools
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
 
       # Same command a developer runs locally — a green check here means
       # `make lint` passes, reproducible without reading this file.
