@@ -1,0 +1,12 @@
+.git
+.github
+.claude
+docs
+test
+AGENTS.md
+CLAUDE.md
+SKILLS.md
+*.md
+.env
+*.local.*
+bin/
