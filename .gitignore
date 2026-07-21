@@ -1,0 +1,9 @@
+.env
+*.local.*
+bin/
+
+# Claude Code planning/config files — local only, never pushed to the public repo
+AGENTS.md
+CLAUDE.md
+SKILLS.md
+.claude/
