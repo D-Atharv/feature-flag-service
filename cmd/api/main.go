@@ -16,10 +16,15 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/D-Atharv/feature-flag-service/internal/config"
+	"github.com/D-Atharv/feature-flag-service/internal/evaluation"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/handlers"
 	"github.com/D-Atharv/feature-flag-service/internal/platform"
 	store "github.com/D-Atharv/feature-flag-service/internal/store/postgres"
 )
+
+// Compile-time assertion: *store.FlagRepo must satisfy evaluation.FlagSource.
+// If FlagRepo ever loses GetByKeyEnv this line fails the build immediately.
+var _ evaluation.FlagSource = (*store.FlagRepo)(nil)
 
 const (
 	readHeaderTimeout  = 5 * time.Second
@@ -130,13 +135,18 @@ func run() error {
 }
 
 // newRouter wires gin.New(), not gin.Default() — the default engine injects
-// Gin's own logger and recovery middleware
+// Gin's own logger and recovery middleware.
 func newRouter(flagRepo *store.FlagRepo) *gin.Engine {
 	router := gin.New()
 	router.GET("/healthz", healthz)
 
+	// Evaluate endpoint at both paths (spec-literal + canonical).
+	// See README §API for why both are intentional.
+	root := router.Group("/")
 	v1 := router.Group("/api/v1")
+
 	handlers.NewFlagHandler(flagRepo).Register(v1)
+	handlers.NewEvalHandler(flagRepo).Register(root, v1)
 
 	return router
 }

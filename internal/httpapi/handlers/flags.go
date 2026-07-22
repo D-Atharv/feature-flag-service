@@ -18,7 +18,6 @@ import (
 
 const defaultPageLimit = 20
 const maxPageLimit = 100
-const handlerTimeout = 10 * time.Second
 
 // keyPattern mirrors the CHECK constraint in the flags table.
 var keyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
@@ -96,18 +95,6 @@ func toResponse(f domain.Flag) flagResponse {
 }
 
 // ---- helpers ----
-
-// actorID extracts the API key ID stored in the Gin context by auth middleware.
-// Returns "" when auth middleware hasn't run (e.g. tests without the full chain).
-func actorID(c *gin.Context) string {
-	v, _ := c.Get("actor_key_id")
-	s, _ := v.(string)
-	return s
-}
-
-func withTimeout(c *gin.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(c.Request.Context(), handlerTimeout)
-}
 
 // validateKey checks the key against the DB constraint pattern.
 func validateKey(key string) error {
