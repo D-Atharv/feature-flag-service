@@ -39,3 +39,30 @@ func (r *APIKeyRepo) GetByHash(ctx context.Context, hash []byte) (domain.APIKey,
 	}
 	return k, nil
 }
+
+// List returns all active API keys. Called once at startup to populate the
+// in-memory KeyMap — never called on the hot path.
+func (r *APIKeyRepo) List(ctx context.Context) ([]domain.APIKey, error) {
+	const q = `
+		SELECT id, name, key_hash, key_prefix, is_admin, rate_limit_rps, rate_limit_burst, active, created_at, last_used_at
+		FROM api_keys WHERE active = true`
+
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list api keys: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []domain.APIKey
+	for rows.Next() {
+		var k domain.APIKey
+		if err := rows.Scan(
+			&k.ID, &k.Name, &k.KeyHash, &k.KeyPrefix, &k.IsAdmin,
+			&k.RateLimitRPS, &k.RateLimitBurst, &k.Active, &k.CreatedAt, &k.LastUsedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan api key: %w", err)
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}

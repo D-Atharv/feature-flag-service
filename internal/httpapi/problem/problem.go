@@ -74,6 +74,11 @@ func NewServiceUnavailable(detail string) *Problem {
 	return &Problem{Type: typeBase + "service-unavailable", Title: "Service Unavailable", Status: http.StatusServiceUnavailable, Detail: detail}
 }
 
+// NewRequestEntityTooLarge constructs a 413 Problem for bodies exceeding the size limit.
+func NewRequestEntityTooLarge(detail string) *Problem {
+	return &Problem{Type: typeBase + "request-entity-too-large", Title: "Request Entity Too Large", Status: http.StatusRequestEntityTooLarge, Detail: detail}
+}
+
 // NewInternal returns a generic 500. Never include the real cause in the detail.
 func NewInternal() *Problem {
 	return &Problem{Type: typeBase + "internal-error", Title: "Internal Server Error", Status: http.StatusInternalServerError, Detail: "An unexpected error occurred."}

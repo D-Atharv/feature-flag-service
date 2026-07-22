@@ -14,16 +14,17 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/D-Atharv/feature-flag-service/internal/config"
 	"github.com/D-Atharv/feature-flag-service/internal/evaluation"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/handlers"
+	"github.com/D-Atharv/feature-flag-service/internal/httpapi/middleware"
 	"github.com/D-Atharv/feature-flag-service/internal/platform"
 	store "github.com/D-Atharv/feature-flag-service/internal/store/postgres"
 )
 
 // Compile-time assertion: *store.FlagRepo must satisfy evaluation.FlagSource.
-// If FlagRepo ever loses GetByKeyEnv this line fails the build immediately.
 var _ evaluation.FlagSource = (*store.FlagRepo)(nil)
 
 const (
@@ -39,7 +40,7 @@ var (
 )
 
 func main() {
-	healthcheck := flag.Bool("healthcheck", false, "probe /healthz on the configured PORT and exit 0/1 (used as the Docker HEALTHCHECK; distroless has no shell/curl to do this itself)")
+	healthcheck := flag.Bool("healthcheck", false, "probe /healthz and exit 0/1")
 	flag.Parse()
 
 	if *healthcheck {
@@ -51,17 +52,12 @@ func main() {
 	}
 }
 
-// runHealthcheck is a self-contained mode, not the running server: it makes
-// one request to its own /healthz and reports success/failure via exit code.
-// Distroless images have no shell, curl, or wget for a Docker HEALTHCHECK to
-// invoke, so the binary has to be able to check itself.
 func runHealthcheck() int {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "healthcheck: config:", err)
 		return 1
 	}
-
 	client := http.Client{Timeout: healthcheckTimeout}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/healthz", cfg.Port))
 	if err != nil {
@@ -69,12 +65,10 @@ func runHealthcheck() int {
 		return 1
 	}
 	defer func() { _ = resp.Body.Close() }()
-
 	if resp.StatusCode != http.StatusOK {
 		fmt.Fprintln(os.Stderr, "healthcheck: unexpected status", resp.StatusCode)
 		return 1
 	}
-
 	return 0
 }
 
@@ -98,10 +92,20 @@ func run() error {
 	defer pool.Close()
 
 	flagRepo := store.NewFlagRepo(pool)
+	keyRepo := store.NewAPIKeyRepo(pool)
+
+	// Load all active API keys into an in-memory map once at startup.
+	// The hot path never touches the DB for auth — O(1) map lookup instead.
+	apiKeys, err := keyRepo.List(startCtx)
+	if err != nil {
+		return fmt.Errorf("load api keys: %w", err)
+	}
+	keyMap := middleware.NewKeyMap(apiKeys)
+	log.Printf("loaded %d active API key(s)", len(apiKeys))
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
-		Handler:           newRouter(flagRepo),
+		Handler:           newRouter(flagRepo, keyMap),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -134,19 +138,48 @@ func run() error {
 	return nil
 }
 
-// newRouter wires gin.New(), not gin.Default() — the default engine injects
-// Gin's own logger and recovery middleware.
-func newRouter(flagRepo *store.FlagRepo) *gin.Engine {
+// newRouter assembles the Gin engine with the full middleware chain.
+//
+// Middleware order (each position is load-bearing — see BUILD-PLAN.md §9.2):
+//
+//	RequestID → Recovery → Logger → Metrics → BodyLimit → Timeout → Auth → handler
+//
+// /healthz and /metrics are registered before Use() so they bypass Auth.
+func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap) *gin.Engine {
 	router := gin.New()
-	router.GET("/healthz", healthz)
 
-	// Evaluate endpoint at both paths (spec-literal + canonical).
-	// See README §API for why both are intentional.
-	root := router.Group("/")
+	// Ops endpoints bypass the auth middleware — registered before Use().
+	router.GET("/healthz", healthz)
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// Global chain applied to all routes registered after this point.
+	router.Use(
+		middleware.RequestIDWithSecurity(),
+		middleware.Recovery(),
+		middleware.Logger(),
+		middleware.Metrics(),
+		middleware.BodyLimit(),
+		middleware.Timeout(),
+		middleware.Auth(keyMap),
+	)
+
+	flagHandler := handlers.NewFlagHandler(flagRepo)
+	evalHandler := handlers.NewEvalHandler(flagRepo)
+
 	v1 := router.Group("/api/v1")
 
-	handlers.NewFlagHandler(flagRepo).Register(v1)
-	handlers.NewEvalHandler(flagRepo).Register(root, v1)
+	// All flag routes require admin scope (non-admin keys are evaluate-only).
+	flagV1 := v1.Group("/")
+	flagV1.Use(middleware.RequireAdmin())
+	flagV1.POST("/flags", flagHandler.Create)
+	flagV1.GET("/flags", flagHandler.List)
+	flagV1.GET("/flags/:key", flagHandler.Get)
+	flagV1.PATCH("/flags/:key", flagHandler.Update)
+	flagV1.DELETE("/flags/:key", flagHandler.Delete)
+
+	// Evaluate routes — all authenticated keys (both admin and evaluate-scoped).
+	root := router.Group("/")
+	evalHandler.Register(root, v1)
 
 	return router
 }
