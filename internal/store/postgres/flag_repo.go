@@ -123,6 +123,31 @@ func (r *FlagRepo) List(ctx context.Context, environment, afterKey, afterEnv str
 	return flags, rows.Err()
 }
 
+// ListAll returns every flag in one query, for the in-memory snapshot.
+// Unpaginated on purpose: a paged read can interleave with a write and yield a
+// torn snapshot.
+func (r *FlagRepo) ListAll(ctx context.Context) ([]domain.Flag, error) {
+	const q = `
+		SELECT id, key, environment, enabled, rollout_percentage, version, created_at, updated_at
+		FROM flags`
+
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list all flags: %w", err)
+	}
+	defer rows.Close()
+
+	var flags []domain.Flag
+	for rows.Next() {
+		var f domain.Flag
+		if err := scanRow(rows, &f); err != nil {
+			return nil, fmt.Errorf("scan flag: %w", err)
+		}
+		flags = append(flags, f)
+	}
+	return flags, rows.Err()
+}
+
 // Create inserts a flag and writes a 'created' audit row in one transaction.
 func (r *FlagRepo) Create(ctx context.Context, f domain.Flag, actorKeyID string) (domain.Flag, error) {
 	tx, err := r.pool.Begin(ctx)

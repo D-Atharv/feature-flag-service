@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,4 +24,17 @@ func NewPostgresPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, er
 	}
 
 	return pool, nil
+}
+
+// NewListenerConnector returns a dialer for a dedicated connection.
+// LISTEN holds a connection for the process's life, so it gets its own rather
+// than one hijacked out of the pool.
+func NewListenerConnector(databaseURL string) func(context.Context) (*pgx.Conn, error) {
+	return func(ctx context.Context) (*pgx.Conn, error) {
+		conn, err := pgx.Connect(ctx, databaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("connect listener: %w", err)
+		}
+		return conn, nil
+	}
 }

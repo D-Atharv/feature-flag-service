@@ -17,6 +17,7 @@ import (
 	"github.com/D-Atharv/feature-flag-service/internal/evaluation"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/handlers"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/problem"
+	"github.com/D-Atharv/feature-flag-service/internal/snapshot"
 )
 
 // ---- fake FlagSource ----
@@ -314,4 +315,49 @@ func TestEvaluate_PartialRollout_ReasonIsIncludedOrExcluded(t *testing.T) {
 			subj, body.Reason,
 		)
 	}
+}
+
+// TestEvaluate_UnloadedSnapshot_Returns503 pins the whole chain: an unloaded
+// snapshot must reach the client as a retryable 503, never as
+// 200 {"enabled":false,"reason":"FLAG_NOT_FOUND"}.
+//
+// The failure this guards against is silent — every flag in the system would
+// read as off, with a success status code, and nothing would alert.
+func TestEvaluate_UnloadedSnapshot_Returns503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// A brand new snapshot: constructed, never loaded.
+	r := newEvalRouter(snapshot.New())
+
+	req := httptest.NewRequest(http.MethodGet, "/evaluate/any-flag?env=prod&subject=u1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"an unloaded snapshot must not answer 200 with FLAG_NOT_FOUND")
+	assert.Equal(t, problem.ContentType, w.Header().Get("Content-Type"))
+
+	var p problem.Problem
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &p))
+	assert.Equal(t, http.StatusServiceUnavailable, p.Status)
+}
+
+// TestEvaluate_LoadedButEmptySnapshot_Returns200NotFound is the other side of
+// the same line: a database with no flags is a loaded, healthy state.
+func TestEvaluate_LoadedButEmptySnapshot_Returns200NotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	s := snapshot.New()
+	s.Replace(nil)
+	r := newEvalRouter(s)
+
+	req := httptest.NewRequest(http.MethodGet, "/evaluate/any-flag?env=prod&subject=u1", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body evalBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.False(t, body.Enabled)
+	assert.Equal(t, string(evaluation.ReasonFlagNotFound), body.Reason)
 }

@@ -96,6 +96,8 @@ func fromDomainErr(err error) *Problem {
 		return NewVersionMismatch(err.Error())
 	case errors.Is(err, domain.ErrInvalidInput):
 		return NewInvalidInput(err.Error())
+	case errors.Is(err, domain.ErrUnavailable):
+		return NewServiceUnavailable(err.Error())
 	default:
 		return nil
 	}

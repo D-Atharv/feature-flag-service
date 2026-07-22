@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/D-Atharv/feature-flag-service/internal/config"
 	"github.com/D-Atharv/feature-flag-service/internal/evaluation"
@@ -24,16 +27,22 @@ import (
 	"github.com/D-Atharv/feature-flag-service/internal/ratelimit"
 	rlmemory "github.com/D-Atharv/feature-flag-service/internal/ratelimit/memory"
 	rlredis "github.com/D-Atharv/feature-flag-service/internal/ratelimit/redis"
+	"github.com/D-Atharv/feature-flag-service/internal/snapshot"
 	store "github.com/D-Atharv/feature-flag-service/internal/store/postgres"
 )
 
-// Compile-time assertion: *store.FlagRepo must satisfy evaluation.FlagSource.
-var _ evaluation.FlagSource = (*store.FlagRepo)(nil)
+// Both satisfy evaluation.FlagSource; /evaluate reads the snapshot.
+var (
+	_ evaluation.FlagSource = (*store.FlagRepo)(nil)
+	_ evaluation.FlagSource = (*snapshot.Store)(nil)
+	_ snapshot.Loader       = (*store.FlagRepo)(nil)
+)
 
 const (
-	readHeaderTimeout  = 5 * time.Second
-	shutdownTimeout    = 10 * time.Second
-	healthcheckTimeout = 2 * time.Second
+	readHeaderTimeout      = 5 * time.Second
+	shutdownTimeout        = 10 * time.Second
+	healthcheckTimeout     = 2 * time.Second
+	dependencyProbeTimeout = 2 * time.Second
 )
 
 var (
@@ -114,9 +123,32 @@ func run() error {
 	defer func() { _ = redisClient.Close() }()
 	limiter := ratelimit.NewBreaker(rlredis.New(redisClient), rlmemory.New())
 
+	// In-memory flag snapshot: /evaluate reads this, never the database, so
+	// evaluations keep serving with Postgres down.
+	flags := snapshot.New()
+	refresher := snapshot.NewRefresher(flags, flagRepo).
+		WithListener(platform.NewListenerConnector(cfg.DatabaseURL))
+
+	// Load before serving, so no request can arrive ahead of the snapshot.
+	// Not fatal on failure: the service starts, /readyz reports not ready, and
+	// the poller keeps trying — a database outage must not block a boot.
+	if err := refresher.Prime(startCtx); err != nil {
+		log.Printf("warning: initial flag snapshot load failed: %v", err)
+	}
+
+	bgCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
+
+	var bg sync.WaitGroup
+	bg.Add(1)
+	go func() {
+		defer bg.Done()
+		refresher.Run(bgCtx)
+	}()
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
-		Handler:           newRouter(flagRepo, keyMap, limiter),
+		Handler:           newRouter(flagRepo, flags, keyMap, limiter, pool, redisClient),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -145,6 +177,10 @@ func run() error {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
 
+	// Background work stops only after in-flight requests have drained.
+	stopBackground()
+	bg.Wait()
+
 	log.Println("shutdown complete")
 	return nil
 }
@@ -159,14 +195,22 @@ func run() error {
 // ID, and last overall because everything before it is bounded and cheap while
 // the handler is the expensive thing being protected.
 //
-// /healthz and /metrics are registered before Use() so they bypass both Auth
-// and the limiter — a liveness probe that can be rate limited will eventually
-// restart a healthy instance.
-func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap, limiter ratelimit.Limiter) *gin.Engine {
+// /healthz, /readyz and /metrics are registered before Use() so they bypass
+// both Auth and the limiter — a probe that can be rate limited eventually
+// restarts a healthy instance.
+func newRouter(
+	flagRepo *store.FlagRepo,
+	flags *snapshot.Store,
+	keyMap middleware.KeyMap,
+	limiter ratelimit.Limiter,
+	pool *pgxpool.Pool,
+	redisClient *goredis.Client,
+) *gin.Engine {
 	router := gin.New()
 
 	// Ops endpoints bypass the auth middleware — registered before Use().
 	router.GET("/healthz", healthz)
+	router.GET("/readyz", readyz(flags))
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Global chain applied to all routes registered after this point.
@@ -182,7 +226,8 @@ func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap, limiter ratel
 	)
 
 	flagHandler := handlers.NewFlagHandler(flagRepo)
-	evalHandler := handlers.NewEvalHandler(flagRepo)
+	// Writes go to Postgres; reads come from the snapshot.
+	evalHandler := handlers.NewEvalHandler(flags)
 
 	v1 := router.Group("/api/v1")
 
@@ -195,6 +240,12 @@ func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap, limiter ratel
 	flagV1.PATCH("/flags/:key", flagHandler.Update)
 	flagV1.DELETE("/flags/:key", flagHandler.Delete)
 
+	// Diagnostic detail, admin only. Kept off /healthz and /readyz so a
+	// dependency blip can never fail a probe.
+	debugGroup := router.Group("/debug")
+	debugGroup.Use(middleware.RequireAdmin())
+	debugGroup.GET("/status", debugStatus(flags, pool, redisClient))
+
 	// Evaluate routes — all authenticated keys (both admin and evaluate-scoped).
 	root := router.Group("/")
 	evalHandler.Register(root, v1)
@@ -202,6 +253,54 @@ func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap, limiter ratel
 	return router
 }
 
+// healthz is liveness and checks nothing external. If it probed Postgres, a
+// brief database blip would restart every healthy instance.
 func healthz(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// readyz gates on the flag snapshot, not on Postgres: with the snapshot loaded
+// this instance serves evaluations whether or not the database is up.
+func readyz(flags *snapshot.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !flags.Loaded() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "not ready",
+				"reason": "flag snapshot not loaded",
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"status":       "ready",
+			"flags":        flags.Len(),
+			"last_refresh": flags.LastRefresh().UTC(),
+		})
+	}
+}
+
+// debugStatus reports dependency health for operators.
+func debugStatus(flags *snapshot.Store, pool *pgxpool.Pool, redisClient *goredis.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), dependencyProbeTimeout)
+		defer cancel()
+
+		state := func(ok bool) string {
+			if ok {
+				return "ok"
+			}
+			return "degraded"
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"version":  version,
+			"git_sha":  gitSHA,
+			"postgres": state(pool != nil && pool.Ping(ctx) == nil),
+			"redis":    state(redisClient != nil && redisClient.Ping(ctx).Err() == nil),
+			"snapshot": gin.H{
+				"loaded":       flags.Loaded(),
+				"flags":        flags.Len(),
+				"last_refresh": flags.LastRefresh().UTC(),
+			},
+		})
+	}
 }
