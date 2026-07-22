@@ -13,12 +13,13 @@ COPY . .
 ARG VERSION=dev
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown
-# TODO: build ./cmd/migrate here too, and copy it in below.
-RUN go build -ldflags "-s -w -X main.version=${VERSION} -X main.gitSHA=${GIT_SHA} -X main.buildTime=${BUILD_TIME}" \
-    -o /out/server ./cmd/api
+RUN LDFLAGS="-s -w -X main.version=${VERSION} -X main.gitSHA=${GIT_SHA} -X main.buildTime=${BUILD_TIME}" && \
+    go build -ldflags "${LDFLAGS}" -o /out/server  ./cmd/api && \
+    go build -ldflags "${LDFLAGS}" -o /out/migrate ./cmd/migrate
 
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
-COPY --from=builder /out/server /app/server
+COPY --from=builder /out/server  /app/server
+COPY --from=builder /out/migrate /app/migrate
 USER nonroot:nonroot
 EXPOSE 8080
 # Distroless has no shell/curl/wget, so the binary probes itself.

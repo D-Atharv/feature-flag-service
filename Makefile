@@ -16,7 +16,8 @@ logs:
 	docker compose logs -f
 
 build:
-	go build -o bin/server ./cmd/api
+	go build -o bin/server  ./cmd/api
+	go build -o bin/migrate ./cmd/migrate
 
 docker-build:
 	docker build $(if $(PLATFORM),--platform=$(PLATFORM)) -t feature-flag-service:local .
@@ -29,12 +30,10 @@ lint:
 	govulncheck ./...
 	./scripts/check-no-ratelimit-deps.sh
 
-# cmd/migrate lands in Phase 1 (goose + embed.FS migrations).
+# --build: docker compose run reuses whatever image is already tagged, which
+# silently goes stale the moment the Dockerfile or source changes.
 migrate:
-	@echo "make migrate: cmd/migrate isn't implemented yet — lands in Phase 1" >&2
-	@exit 1
+	docker compose run --build --rm --entrypoint /app/migrate api up
 
-# Depends on internal/store/postgres (Phase 1) for the API-key repository.
 seed:
-	@echo "make seed: internal/store/postgres isn't implemented yet — lands in Phase 1" >&2
-	@exit 1
+	docker compose run --build --rm --entrypoint /app/migrate api seed
