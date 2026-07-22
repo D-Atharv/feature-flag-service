@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Newest run per branch wins; cancel the rest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -51,14 +56,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Pinned to match local dev; @latest could fail CI with no code change.
-      # Prebuilt binary, not `go install` — that compiled ~150 deps from
-      # source and was the single slowest step (~1m of a ~4m job).
+      # Prebuilt binary, not `go install` (~1m faster).
+      # Pinned to the release, not master: an unpinned install.sh broke on a
+      # .sbom.json asset whose name prefixes the tarball's. Grep is anchored so
+      # it can't match that sibling.
       - name: Install lint tools
+        env:
+          GOLANGCI_VERSION: 2.12.2
+          GOVULNCHECK_VERSION: v1.6.0
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
-          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          set -euo pipefail
+          base="https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_VERSION}"
+          dir="golangci-lint-${GOLANGCI_VERSION}-linux-amd64"
+          curl -sSfL "${base}/${dir}.tar.gz" -o "${dir}.tar.gz"
+          curl -sSfL "${base}/golangci-lint-${GOLANGCI_VERSION}-checksums.txt" -o checksums.txt
+          grep -E "  ${dir}\.tar\.gz\$" checksums.txt | sha256sum -c -
+          tar -xzf "${dir}.tar.gz"
+          install -m 0755 "${dir}/golangci-lint" "$(go env GOPATH)/bin/golangci-lint"
+          rm -rf "${dir}" "${dir}.tar.gz" checksums.txt
+          golangci-lint --version
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
 
       # Same command a developer runs locally — a green check here means
       # `make lint` passes, reproducible without reading this file.
