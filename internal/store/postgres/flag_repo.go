@@ -248,9 +248,3 @@ func (r *FlagRepo) Delete(ctx context.Context, key, environment, actorKeyID stri
 	}
 	return nil
 }
-
-func (r *FlagRepo) exists(ctx context.Context, key, environment string) (bool, error) {
-	const q = `SELECT EXISTS(SELECT 1 FROM flags WHERE key = $1 AND environment = $2)`
-	var exists bool
-	return exists, r.pool.QueryRow(ctx, q, key, environment).Scan(&exists)
-}

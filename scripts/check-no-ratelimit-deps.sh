@@ -6,7 +6,16 @@
 # §3.5.
 set -euo pipefail
 
-FORBIDDEN='golang.org/x/time/rate|go-redis/redis_rate|ulule/limiter|didip/tollbooth|throttled|uber-go/ratelimit'
+# Manifest pattern: bare module names are fine here, because go.mod/go.sum
+# contain nothing but module paths.
+FORBIDDEN_MOD='golang.org/x/time/rate|go-redis/redis_rate|ulule/limiter|didip/tollbooth|throttled|uber-go/ratelimit'
+
+# Source pattern: import-path forms only. The manifest pattern cannot be
+# reused here — `throttled` is also an ordinary English word, so a doc comment
+# reading "requests are throttled" would fail the build. Verified: it did.
+# The manifest grep is what actually proves compliance; an import that isn't
+# in go.mod cannot compile, so narrowing the source grep costs no coverage.
+FORBIDDEN_SRC='golang\.org/x/time/rate|github\.com/go-redis/redis_rate|github\.com/ulule/limiter|github\.com/didip/tollbooth|github\.com/throttled/throttled|go\.uber\.org/ratelimit'
 
 found=0
 
@@ -15,11 +24,11 @@ found=0
 # both into one grep silently skips the manifests. That would miss the most
 # likely violation of all (`go get golang.org/x/time/rate`) and every
 # transitive dependency, which only ever appear in go.sum.
-if grep -En "$FORBIDDEN" go.mod go.sum 2>/dev/null; then
+if grep -En "$FORBIDDEN_MOD" go.mod go.sum 2>/dev/null; then
   found=1
 fi
 
-if grep -REn --include='*.go' "$FORBIDDEN" . 2>/dev/null; then
+if grep -REn --include='*.go' "$FORBIDDEN_SRC" . 2>/dev/null; then
   found=1
 fi
 

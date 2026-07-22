@@ -64,7 +64,11 @@ func Decide(ctx context.Context, src FlagSource, flagKey, env, subject string) (
 		return Result{Enabled: false, Reason: ReasonRolloutZero}, nil
 	}
 
-	if bucketOf(flagKey, env, subject) < uint32(f.RolloutPercentage) {
+	// Widen the bucket rather than narrowing the percentage: bucketOf returns
+	// a value in [0,100) so int always holds it, whereas int -> uint32 is a
+	// conversion gosec cannot prove safe (G115) even though the column is
+	// CHECK-constrained to 0..100.
+	if int(bucketOf(flagKey, env, subject)) < f.RolloutPercentage {
 		return Result{Enabled: true, Reason: ReasonRolloutIncluded}, nil
 	}
 	return Result{Enabled: false, Reason: ReasonRolloutExcluded}, nil

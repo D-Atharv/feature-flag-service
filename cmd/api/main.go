@@ -21,6 +21,9 @@ import (
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/handlers"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/middleware"
 	"github.com/D-Atharv/feature-flag-service/internal/platform"
+	"github.com/D-Atharv/feature-flag-service/internal/ratelimit"
+	rlmemory "github.com/D-Atharv/feature-flag-service/internal/ratelimit/memory"
+	rlredis "github.com/D-Atharv/feature-flag-service/internal/ratelimit/redis"
 	store "github.com/D-Atharv/feature-flag-service/internal/store/postgres"
 )
 
@@ -103,9 +106,17 @@ func run() error {
 	keyMap := middleware.NewKeyMap(apiKeys)
 	log.Printf("loaded %d active API key(s)", len(apiKeys))
 
+	// Rate limiter. Redis holds the authoritative buckets so quota outlives
+	// this process; the in-memory limiter is the fallback the circuit breaker
+	// routes to when Redis is unreachable. Constructing it never fails —
+	// a limiter that can refuse to start is not one that fails open.
+	redisClient := platform.NewRedisClient(cfg.RedisAddr)
+	defer func() { _ = redisClient.Close() }()
+	limiter := ratelimit.NewBreaker(rlredis.New(redisClient), rlmemory.New())
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
-		Handler:           newRouter(flagRepo, keyMap),
+		Handler:           newRouter(flagRepo, keyMap, limiter),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -142,10 +153,16 @@ func run() error {
 //
 // Middleware order (each position is load-bearing — see BUILD-PLAN.md §9.2):
 //
-//	RequestID → Recovery → Logger → Metrics → BodyLimit → Timeout → Auth → handler
+//	RequestID → Recovery → Logger → Metrics → BodyLimit → Timeout → Auth → RateLimit → handler
 //
-// /healthz and /metrics are registered before Use() so they bypass Auth.
-func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap) *gin.Engine {
+// RateLimit sits after Auth because a bucket is keyed on the resolved API key
+// ID, and last overall because everything before it is bounded and cheap while
+// the handler is the expensive thing being protected.
+//
+// /healthz and /metrics are registered before Use() so they bypass both Auth
+// and the limiter — a liveness probe that can be rate limited will eventually
+// restart a healthy instance.
+func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap, limiter ratelimit.Limiter) *gin.Engine {
 	router := gin.New()
 
 	// Ops endpoints bypass the auth middleware — registered before Use().
@@ -161,6 +178,7 @@ func newRouter(flagRepo *store.FlagRepo, keyMap middleware.KeyMap) *gin.Engine {
 		middleware.BodyLimit(),
 		middleware.Timeout(),
 		middleware.Auth(keyMap),
+		middleware.RateLimit(limiter),
 	)
 
 	flagHandler := handlers.NewFlagHandler(flagRepo)

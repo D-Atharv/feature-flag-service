@@ -17,6 +17,12 @@ import (
 // TEST_DATABASE_URL so it works both in CI (a bare "localhost" GH Actions
 // service) and locally against docker-compose, whose published port varies
 // by machine (see docker-compose.yml's port-conflict comment).
+// ptr is for the optional Update fields: nil means "leave this column alone",
+// which is what makes PATCH semantics distinguishable from "set it to false".
+func ptr[T any](v T) *T { return &v }
+
+// Writes here pass an empty actor id, stored as NULL in flag_audit — these are
+// repository-level tests with no authenticated caller behind them.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
@@ -39,7 +45,7 @@ func TestFlagRepo_CreateGetUpdateDelete(t *testing.T) {
 	key, env := "integration-crud-flag", "dev"
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM flags WHERE key = $1", key) })
 
-	created, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env, Enabled: true, RolloutPercentage: 50})
+	created, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env, Enabled: true, RolloutPercentage: 50}, "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, created.ID)
 	assert.Equal(t, 1, created.Version)
@@ -48,14 +54,14 @@ func TestFlagRepo_CreateGetUpdateDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, created, got)
 
-	updated, err := repo.Update(ctx, key, env, got.Version, false, 75)
+	updated, err := repo.Update(ctx, key, env, got.Version, ptr(false), ptr(75), "")
 	require.NoError(t, err)
 	assert.False(t, updated.Enabled)
 	assert.Equal(t, 75, updated.RolloutPercentage)
 	assert.Equal(t, 2, updated.Version)
 	assert.True(t, !updated.UpdatedAt.Before(created.UpdatedAt))
 
-	require.NoError(t, repo.Delete(ctx, key, env))
+	require.NoError(t, repo.Delete(ctx, key, env, ""))
 
 	_, err = repo.GetByKeyEnv(ctx, key, env)
 	assert.ErrorIs(t, err, domain.ErrNotFound)
@@ -69,15 +75,15 @@ func TestFlagRepo_Create_DuplicateKeyEnvironment_Conflict(t *testing.T) {
 	key := "integration-dup-flag"
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM flags WHERE key = $1", key) })
 
-	_, err := repo.Create(ctx, domain.Flag{Key: key, Environment: "dev"})
+	_, err := repo.Create(ctx, domain.Flag{Key: key, Environment: "dev"}, "")
 	require.NoError(t, err)
 
-	_, err = repo.Create(ctx, domain.Flag{Key: key, Environment: "dev"})
+	_, err = repo.Create(ctx, domain.Flag{Key: key, Environment: "dev"}, "")
 	assert.ErrorIs(t, err, domain.ErrConflict)
 
 	// Same key, different environment must succeed — that's the entire
 	// point of UNIQUE (key, environment) instead of UNIQUE (key).
-	_, err = repo.Create(ctx, domain.Flag{Key: key, Environment: "staging"})
+	_, err = repo.Create(ctx, domain.Flag{Key: key, Environment: "staging"}, "")
 	assert.NoError(t, err)
 }
 
@@ -100,7 +106,7 @@ func TestFlagRepo_Create_ConstraintViolations_InvalidInput(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM flags WHERE key = $1", c.flag.Key) })
 
-			_, err := repo.Create(ctx, c.flag)
+			_, err := repo.Create(ctx, c.flag, "")
 			require.Error(t, err)
 			assert.ErrorIs(t, err, domain.ErrInvalidInput)
 			assert.NotErrorIs(t, err, domain.ErrConflict)
@@ -117,10 +123,10 @@ func TestFlagRepo_Update_RolloutOverRange_InvalidInput(t *testing.T) {
 	key, env := "ci-update-bad-rollout", "dev"
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM flags WHERE key = $1", key) })
 
-	created, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env})
+	created, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env}, "")
 	require.NoError(t, err)
 
-	_, err = repo.Update(ctx, key, env, created.Version, true, 999)
+	_, err = repo.Update(ctx, key, env, created.Version, ptr(true), ptr(999), "")
 	assert.ErrorIs(t, err, domain.ErrInvalidInput)
 }
 
@@ -132,10 +138,10 @@ func TestFlagRepo_Update_VersionMismatch(t *testing.T) {
 	key, env := "integration-version-flag", "dev"
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM flags WHERE key = $1", key) })
 
-	created, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env})
+	created, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env}, "")
 	require.NoError(t, err)
 
-	_, err = repo.Update(ctx, key, env, created.Version+1, true, 10)
+	_, err = repo.Update(ctx, key, env, created.Version+1, ptr(true), ptr(10), "")
 	assert.ErrorIs(t, err, domain.ErrVersionMismatch)
 }
 
@@ -143,7 +149,7 @@ func TestFlagRepo_Update_NotFound(t *testing.T) {
 	pool := testPool(t)
 	repo := pgstore.NewFlagRepo(pool)
 
-	_, err := repo.Update(context.Background(), "no-such-flag", "dev", 1, true, 10)
+	_, err := repo.Update(context.Background(), "no-such-flag", "dev", 1, ptr(true), ptr(10), "")
 	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
@@ -151,7 +157,7 @@ func TestFlagRepo_Delete_NotFound(t *testing.T) {
 	pool := testPool(t)
 	repo := pgstore.NewFlagRepo(pool)
 
-	err := repo.Delete(context.Background(), "no-such-flag", "dev")
+	err := repo.Delete(context.Background(), "no-such-flag", "dev", "")
 	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
@@ -169,7 +175,7 @@ func TestFlagRepo_List(t *testing.T) {
 	})
 
 	for _, key := range []string{"a-flag", "b-flag", "c-flag"} {
-		_, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env})
+		_, err := repo.Create(ctx, domain.Flag{Key: key, Environment: env}, "")
 		require.NoError(t, err)
 	}
 

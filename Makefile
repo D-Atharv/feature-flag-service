@@ -1,4 +1,4 @@
-.PHONY: up down logs build docker-build test lint migrate seed
+.PHONY: up down logs build docker-build test lint migrate seed demo-restart
 
 # Override at invocation if you ever need a specific target platform, e.g.
 # `make docker-build PLATFORM=linux/amd64`. Not baked in by default: Render
@@ -37,3 +37,9 @@ migrate:
 
 seed:
 	docker compose run --build --rm --entrypoint /app/migrate api seed
+
+# Proves the assignment's third requirement: rate limit state survives a
+# restart. Pass DEMO_KEY to reuse an existing key; otherwise the script seeds a
+# fresh one and restarts the API so it picks the new keys up.
+demo-restart:
+	./scripts/demo-restart.sh

@@ -37,8 +37,11 @@ func Logger() gin.HandlerFunc {
 		}
 
 		// Sampling: drop most successful /evaluate logs to protect throughput.
+		// math/rand is correct here and crypto/rand would be wrong: this picks
+		// which log lines to keep, it guards nothing, and a CSPRNG on the hot
+		// path would cost more than the logging it is sampling.
 		if isEvaluatePath(path) && status < 400 {
-			if rand.Float64() >= evaluateSampleRate {
+			if rand.Float64() >= evaluateSampleRate { //nolint:gosec // G404: log sampling is not a security decision
 				return
 			}
 		}

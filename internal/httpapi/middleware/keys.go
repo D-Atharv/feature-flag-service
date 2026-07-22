@@ -1,6 +1,7 @@
 // Package middleware contains the hand-rolled Gin middleware chain.
 // Middleware order (enforced in main.go):
-//   RequestID → Recovery → Logger → Metrics → BodyLimit → Timeout → Auth → handler
+//
+//	RequestID → Recovery → Logger → Metrics → BodyLimit → Timeout → Auth → RateLimit → handler
 package middleware
 
 // Context keys stored in the Gin context by this middleware chain.

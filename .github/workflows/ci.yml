@@ -38,6 +38,9 @@ jobs:
       # (which publishes 5433 locally) — same host, different actual port.
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/feature_flags?sslmode=disable
       REDIS_ADDR: localhost:6379
+      # Same split as TEST_DATABASE_URL: docker-compose publishes Redis on
+      # 6380 locally (the tests' default), the GH Actions service is on 6379.
+      TEST_REDIS_ADDR: localhost:6379
       LOG_LEVEL: debug
 
     steps:
