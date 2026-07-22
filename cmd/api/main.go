@@ -16,6 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/D-Atharv/feature-flag-service/internal/config"
+	"github.com/D-Atharv/feature-flag-service/internal/httpapi/handlers"
+	"github.com/D-Atharv/feature-flag-service/internal/platform"
+	store "github.com/D-Atharv/feature-flag-service/internal/store/postgres"
 )
 
 const (
@@ -82,9 +85,18 @@ func run() error {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
+	startCtx := context.Background()
+	pool, err := platform.NewPostgresPool(startCtx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("postgres: %w", err)
+	}
+	defer pool.Close()
+
+	flagRepo := store.NewFlagRepo(pool)
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
-		Handler:           newRouter(),
+		Handler:           newRouter(flagRepo),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -119,9 +131,13 @@ func run() error {
 
 // newRouter wires gin.New(), not gin.Default() — the default engine injects
 // Gin's own logger and recovery middleware
-func newRouter() *gin.Engine {
+func newRouter(flagRepo *store.FlagRepo) *gin.Engine {
 	router := gin.New()
 	router.GET("/healthz", healthz)
+
+	v1 := router.Group("/api/v1")
+	handlers.NewFlagHandler(flagRepo).Register(v1)
+
 	return router
 }
 
