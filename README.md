@@ -7,7 +7,7 @@ A Go + Gin + Postgres service for managing feature flags with per-environment ta
 
 **Keys:** 
 DEMO= lo_live_c8226e925379de47ec64af97c84605d9617d6d082e9ad03bb13041cc267f9319\
-ADMIN= lo_live_5a103b78b495adc672a1a1c3e72cda4272a4bdd3a348e9af9eb8896e73df6850
+ADMIN= lo_live_15eb9bc330c687ac8bd29fc690fda374a0fcc9d918f74499d919fcfa39010049
 
 ---
 
