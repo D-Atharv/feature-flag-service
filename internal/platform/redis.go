@@ -3,16 +3,12 @@ package platform
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// Redis client timeouts. These are the limiter's real safety net: without
-// them, a Redis that accepts connections but stops answering would hold every
-// request until the 30s global request timeout, turning a limiter blip into an
-// outage. One second is generous for a sub-millisecond operation on the same
-// network, and a timeout is just another failure the circuit breaker counts.
 const (
 	redisDialTimeout  = 2 * time.Second
 	redisReadTimeout  = time.Second
@@ -21,21 +17,30 @@ const (
 	redisPingTimeout  = 2 * time.Second
 )
 
-// NewRedisClient builds the client used for rate limiter state.
-//
-// Unlike NewPostgresPool this does NOT fail startup when the server is
-// unreachable — it warns and returns a usable client. That asymmetry is
-// deliberate: Postgres is required to serve, whereas the limiter is designed
-// to degrade to an in-process fallback. A service that refuses to boot because
-// its rate limiter is down has inverted the entire point of failing open.
+
 func NewRedisClient(addr string) *goredis.Client {
-	client := goredis.NewClient(&goredis.Options{
+	opts := &goredis.Options{
 		Addr:         addr,
 		DialTimeout:  redisDialTimeout,
 		ReadTimeout:  redisReadTimeout,
 		WriteTimeout: redisWriteTimeout,
 		PoolSize:     redisPoolSize,
-	})
+	}
+
+	if strings.HasPrefix(addr, "redis://") || strings.HasPrefix(addr, "rediss://") {
+		if parsed, err := goredis.ParseURL(addr); err != nil {
+			slog.Error("REDIS_ADDR looks like a URL but failed to parse; connecting will fail",
+				"error", err.Error())
+		} else {
+			parsed.DialTimeout = redisDialTimeout
+			parsed.ReadTimeout = redisReadTimeout
+			parsed.WriteTimeout = redisWriteTimeout
+			parsed.PoolSize = redisPoolSize
+			opts = parsed
+		}
+	}
+
+	client := goredis.NewClient(opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), redisPingTimeout)
 	defer cancel()
@@ -46,6 +51,6 @@ func NewRedisClient(addr string) *goredis.Client {
 		return client
 	}
 
-	slog.Info("redis connected", "addr", addr)
+	slog.Info("redis connected", "addr", opts.Addr, "tls", opts.TLSConfig != nil)
 	return client
 }
