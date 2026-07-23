@@ -21,6 +21,7 @@ import (
 
 	"github.com/D-Atharv/feature-flag-service/internal/config"
 	"github.com/D-Atharv/feature-flag-service/internal/evaluation"
+	apidocs "github.com/D-Atharv/feature-flag-service/internal/httpapi/docs"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/handlers"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/middleware"
 	"github.com/D-Atharv/feature-flag-service/internal/platform"
@@ -208,10 +209,14 @@ func newRouter(
 ) *gin.Engine {
 	router := gin.New()
 
-	// Ops endpoints bypass the auth middleware — registered before Use().
+	// Ops and documentation bypass the auth middleware — registered before
+	// Use(). An interviewer opening the bare URL must reach something useful,
+	// and a 401 is as unhelpful as a 404.
+	router.GET("/", index)
 	router.GET("/healthz", healthz)
 	router.GET("/readyz", readyz(flags))
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	apidocs.Register(router)
 
 	// Global chain applied to all routes registered after this point.
 	router.Use(
@@ -251,6 +256,21 @@ func newRouter(
 	evalHandler.Register(root, v1)
 
 	return router
+}
+
+// index answers the bare URL with what is running and where to go next.
+func index(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"service":    "feature-flag-service",
+		"version":    version,
+		"git_sha":    gitSHA,
+		"build_time": buildTime,
+		"docs":       "/docs",
+		"health":     "/healthz",
+		"ready":      "/readyz",
+		"metrics":    "/metrics",
+		"evaluate":   "/evaluate/{key}?env={env}&subject={subject}",
+	})
 }
 
 // healthz is liveness and checks nothing external. If it probed Postgres, a

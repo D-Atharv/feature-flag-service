@@ -1,0 +1,676 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Feature Flag Service",
+    "version": "1.0.0",
+    "description": "Feature flags with sticky percentage rollouts and a hand-rolled per-key token bucket whose state survives a restart.\n\n**Two behaviours worth reading before you call anything:**\n\n1. `GET /evaluate/{key}` returns **200 with `reason: FLAG_NOT_FOUND`** for an unknown flag, not 404. Evaluation is on the caller's hot path and a 404 becomes an exception in most HTTP clients. Pass `?strict=true` to opt into 404 semantics.\n2. Every response carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`. A 429 adds `Retry-After`, in whole seconds."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This instance"
+    }
+  ],
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Evaluate",
+      "description": "The read path. Serves from an in-process snapshot; issues no database query."
+    },
+    {
+      "name": "Flags",
+      "description": "Flag CRUD. Requires an admin-scoped key."
+    },
+    {
+      "name": "Ops",
+      "description": "Health, readiness and metrics. No authentication."
+    }
+  ],
+  "paths": {
+    "/evaluate/{key}": {
+      "get": {
+        "tags": [
+          "Evaluate"
+        ],
+        "summary": "Evaluate a flag for a subject",
+        "description": "Sticky: the same subject always gets the same answer for a given flag, environment and rollout percentage. Raising the rollout only ever adds subjects, never removes them.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "new-checkout-flow"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "prod"
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "required": false,
+            "description": "Identity to bucket on. Falls back to the X-Subject-ID header, then the API key id.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "user-42"
+          },
+          {
+            "name": "strict",
+            "in": "query",
+            "required": false,
+            "description": "Return 404 instead of 200 for an unknown flag.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evaluation result. Also returned for an unknown flag, with reason FLAG_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evaluation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "description": "Flag snapshot not loaded yet. Retryable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluate/{key}": {
+      "get": {
+        "tags": [
+          "Evaluate"
+        ],
+        "summary": "Evaluate a flag (canonical path)",
+        "description": "Identical to /evaluate/{key}. Both are mounted deliberately: the spec asks for /evaluate, the API convention is /api/v1.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evaluation result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evaluation"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/flags": {
+      "get": {
+        "tags": [
+          "Flags"
+        ],
+        "summary": "List flags",
+        "description": "Keyset pagination, not OFFSET.",
+        "parameters": [
+          {
+            "name": "environment",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of flags. Keyset-paginated: pass next_cursor back as ?cursor= for the following page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Flags"
+        ],
+        "summary": "Create a flag",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFlag"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flag"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "description": "A flag with this key already exists in this environment.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/flags/{key}": {
+      "get": {
+        "tags": [
+          "Flags"
+        ],
+        "summary": "Get a flag",
+        "description": "With ?environment=, returns that one flag. Without it, returns every environment's row for the key, wrapped in the same envelope as the list endpoint — the response shape depends on the query.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One flag when ?environment= is supplied; otherwise every environment's row for that key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Flag"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FlagList"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Flags"
+        ],
+        "summary": "Update a flag",
+        "description": "Optimistic concurrency. Send If-Match with the current version; a stale value returns 412 rather than silently overwriting a concurrent edit.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "Current version, e.g. \"3\".",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFlag"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flag"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "412": {
+            "description": "Version mismatch — someone else changed this flag.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Flags"
+        ],
+        "summary": "Delete a flag",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted. An audit row is written in the same transaction."
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Ops"
+        ],
+        "summary": "Liveness",
+        "description": "Checks nothing external. If it probed Postgres, a brief database blip would restart every healthy instance.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Alive."
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Ops"
+        ],
+        "summary": "Readiness",
+        "description": "Gates on the flag snapshot being loaded, not on Postgres — this instance can serve evaluations with the database down.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready."
+          },
+          "503": {
+            "description": "Snapshot not loaded yet."
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Ops"
+        ],
+        "summary": "Prometheus metrics",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Metrics in the Prometheus text format."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Keys are scoped. An evaluate-scoped key cannot modify flags."
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "RFC 7807 problem details.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Rate limit exceeded for this API key.",
+        "headers": {
+          "RateLimit-Limit": {
+            "description": "Requests admissible in one burst.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "RateLimit-Remaining": {
+            "description": "Tokens left, rounded down.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "RateLimit-Reset": {
+            "description": "Seconds until the bucket is full.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "Retry-After": {
+            "description": "Whole seconds to wait, never below 1.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Evaluation": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "reason",
+          "flag_key",
+          "environment",
+          "subject",
+          "evaluated_at"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Machine-readable explanation. Switch on this, not on enabled alone.",
+            "enum": [
+              "FLAG_NOT_FOUND",
+              "FLAG_DISABLED",
+              "ROLLOUT_FULL",
+              "ROLLOUT_ZERO",
+              "ROLLOUT_INCLUDED",
+              "ROLLOUT_EXCLUDED"
+            ]
+          },
+          "flag_key": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Echoed back, so a missing subject is visible rather than silent."
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Flag": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Master kill switch, evaluated before rollout."
+          },
+          "rollout_percentage": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "version": {
+            "type": "integer",
+            "description": "Send as If-Match on update."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateFlag": {
+        "type": "object",
+        "required": [
+          "key",
+          "environment"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-_]{0,63}$",
+            "example": "new-checkout-flow"
+          },
+          "environment": {
+            "type": "string",
+            "example": "prod"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "rollout_percentage": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "default": 0
+          }
+        }
+      },
+      "UpdateFlag": {
+        "type": "object",
+        "description": "Omitted fields are left unchanged.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "rollout_percentage": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 7807.",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "FlagList": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Flag"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Opaque cursor for the next page; absent on the last page.",
+            "example": "new-checkout-flow|prod"
+          }
+        }
+      }
+    }
+  }
+}

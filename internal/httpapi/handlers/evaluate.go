@@ -9,6 +9,7 @@ import (
 
 	"github.com/D-Atharv/feature-flag-service/internal/evaluation"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/problem"
+	"github.com/D-Atharv/feature-flag-service/internal/observability"
 )
 
 // EvalHandler serves both /evaluate/:key and /api/v1/evaluate/:key.
@@ -68,6 +69,9 @@ func (h *EvalHandler) Evaluate(c *gin.Context) {
 		problem.Write(c, err)
 		return
 	}
+
+	observability.RecordEvaluation(flagKey, env, string(result.Reason),
+		result.Reason != evaluation.ReasonFlagNotFound)
 
 	// Strict mode: return 404 for unknown flags instead of the default 200+reason.
 	if strict && result.Reason == evaluation.ReasonFlagNotFound {

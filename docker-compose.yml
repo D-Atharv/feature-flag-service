@@ -29,7 +29,12 @@ services:
       - redis_data:/data
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     environment:
       ENV: ${ENV:-dev}
       PORT: ${PORT:-8080}
