@@ -2,7 +2,8 @@
 
 A Go + Gin + Postgres service for managing feature flags with per-environment targeting, sticky percentage rollouts via consistent hashing, a hand-rolled per-API-key token-bucket rate limiter, and rate-limiter state that survives a service restart.
 
-**Live:** https://ffs-api-u2mn.onrender.com  ·  **Interactive API docs:** https://ffs-api-u2mn.onrender.com/docs  ·  **Repo:** https://github.com/D-Atharv/feature-flag-service
+**Live:** https://ffs-api-u2mn.onrender.com  ·  **Interactive API docs:** https://ffs-api-u2mn.onrender.com/docs  ·  **Repo:** <https://github.com/D-Atharv/feature-flag-service> ·  **Keys:** DEMO= lo_live_c8226e925379de47ec64af97c84605d9617d6d082e9ad03bb13041cc267f9319\
+ADMIN= lo_live_5a103b78b495adc672a1a1c3e72cda4272a4bdd3a348e9af9eb8896e73df6850
 
 ---
 
@@ -477,13 +478,3 @@ Named up front rather than left to be discovered — all are deliberate trades f
 - **Build metadata on Render.** `GET /` reports `version: dev` there — Render's Blueprint has no field to pass Docker build args. Cosmetic; `git_sha` is correct in local/CI builds.
 
 ---
-
-## What I'd do differently with more time
-
-- **Two-tier rate limiting** — a local per-instance lease over a shared Redis budget, to cut the per-request round trip and scale past \~50k rps.
-- **Live-refresh API keys** via the same `LISTEN/NOTIFY` mechanism flags already use, removing the restart-to-rotate limitation.
-- **A coarse per-IP pre-auth limiter** to bound unauthenticated floods before the auth check.
-- **OpenTelemetry** traces across the middleware chain and the DB/Redis calls.
-- **Multi-region / multi-instance** with the persistence and consistency story that implies (the design already tolerates scale-out; this is about proving it).
-- **Terraform** for the deployment instead of a provisioning script, once the platform is settled.
-- **Self-hosted Redis with AOF** (or a managed tier that supports it) to upgrade the persistence claim from "survives restarts" to "durable."
