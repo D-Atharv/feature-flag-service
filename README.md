@@ -32,6 +32,8 @@ A published **demo key** is included below on purpose. It is *evaluate-scoped*(c
 ```bash
 BASE=https://ffs-api-u2mn.onrender.com
 DEMO=lo_live_c8226e925379de47ec64af97c84605d9617d6d082e9ad03bb13041cc267f9319
+ADMIN=lo_live_15eb9bc330c687ac8bd29fc690fda374a0fcc9d918f74499d919fcfa39010049
+LOADTEST=lo_live_5a103b78b495adc672a1a1c3e72cda4272a4bdd3a348e9af9eb8896e73df6850
 
 # 1. Service index — version, git SHA, links (no auth)
 curl -s $BASE/ | jq
@@ -414,11 +416,11 @@ Five environment variables, validated at startup (fail-fast — a missing var is
 
 | Var | Example | Notes |
 | --- | --- | --- |
-| `ENV` | `prod` | `dev` | `staging` | `prod` |
+| `ENV` | `prod` | `dev` |
 | `PORT` | `8080` | On Render, injected automatically |
 | `DATABASE_URL` | `postgres://…` | pgxpool |
 | `REDIS_ADDR` | `redis:6379` or `redis://…` | accepts host:port *or* a `redis://`/`rediss://` URL |
-| `LOG_LEVEL` | `info` | `debug` | `info` | `warn` | `error` |
+| `LOG_LEVEL` | `info` | `debug` |
 
 **Three seeded API keys** (`make seed`), deliberately distinct:
 
