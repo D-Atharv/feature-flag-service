@@ -13,7 +13,7 @@ databases:
     databaseName: feature_flags
     user: ffs
     postgresMajorVersion: "16"
-    plan: basic-256mb # avoid "free" — it expires after 30 days
+    plan: free
 
 services:
   - type: keyvalue
@@ -35,7 +35,7 @@ services:
     # Purely cosmetic — every other build-info field (RENDER_GIT_COMMIT etc.)
     # is still available at runtime via envVars below if this needs fixing
     # properly later; not worth the Dockerfile rework tonight.
-    plan: starter # NOT free: free web services cold-start (~50s) after idle
+    plan: free
     healthCheckPath: /healthz # liveness only — checks nothing external
     preDeployCommand: "/app/migrate up"
     envVars:
