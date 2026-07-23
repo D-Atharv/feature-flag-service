@@ -2,11 +2,7 @@
 #
 # Apply: Render dashboard -> New -> Blueprint -> pick this repo.
 #
-# Known risk, untested against Render specifically: the runtime image
-# (gcr.io/distroless/static-debian12:nonroot) has no shell. If Render wraps
-# preDeployCommand in `sh -c`, this step fails with something like
-# `exec: "/bin/sh": no such file or directory`. First deploy is the test —
-# see docs/DEFENSE.md / the deploy notes for the fallback if it does.
+# No preDeployCommand: Render rejects it outright on the free web service
 
 databases:
   - name: ffs-postgres
@@ -37,7 +33,6 @@ services:
     # properly later; not worth the Dockerfile rework tonight.
     plan: free
     healthCheckPath: /healthz # liveness only — checks nothing external
-    preDeployCommand: "/app/migrate up"
     envVars:
       - key: ENV
         value: prod
