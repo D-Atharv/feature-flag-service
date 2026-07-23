@@ -116,7 +116,7 @@
           "Evaluate"
         ],
         "summary": "Evaluate a flag (canonical path)",
-        "description": "Identical to /evaluate/{key}. Both are mounted deliberately: the spec asks for /evaluate, the API convention is /api/v1.",
+        "description": "Routed to the identical handler as /evaluate/{key} — same behaviour, same status codes, same response shape. Both are mounted deliberately: the spec asks for /evaluate, the API convention is /api/v1.",
         "parameters": [
           {
             "name": "key",
@@ -141,11 +141,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "strict",
+            "in": "query",
+            "required": false,
+            "description": "Return 404 instead of 200 for an unknown flag.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Evaluation result.",
+            "description": "Evaluation result. Also returned for an unknown flag, with reason FLAG_NOT_FOUND.",
             "content": {
               "application/json": {
                 "schema": {
@@ -154,11 +163,24 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
           "401": {
             "$ref": "#/components/responses/Problem"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "description": "Flag snapshot not loaded yet. Retryable.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }

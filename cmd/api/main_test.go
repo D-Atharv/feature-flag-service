@@ -162,6 +162,28 @@ func TestSpecMatchesTheHandlersItDocuments(t *testing.T) {
 	byKeyGet, _ := json.Marshal(spec.Paths["/api/v1/flags/{key}"]["get"])
 	assert.Contains(t, string(byKeyGet), "oneOf",
 		"GET /flags/{key} returns a Flag with ?environment= and an envelope without it")
+
+	// /evaluate/{key} and /api/v1/evaluate/{key} route to the SAME handler
+	// (evaluate.go Register mounts h.Evaluate on both groups), so a status code
+	// reachable on one path is reachable on the other. Caught live: the docs
+	// listed 400/503 only under /evaluate, silently implying the canonical
+	// /api/v1 path could never 400 or 503 — false, since it's identical code.
+	responseCodes := func(path string) map[string]bool {
+		t.Helper()
+		get, ok := spec.Paths[path]["get"].(map[string]any)
+		require.True(t, ok, "missing GET %s in the spec", path)
+		responses, ok := get["responses"].(map[string]any)
+		require.True(t, ok, "GET %s has no documented responses", path)
+		codes := make(map[string]bool, len(responses))
+		for code := range responses {
+			codes[code] = true
+		}
+		return codes
+	}
+	assert.Equal(t,
+		responseCodes("/evaluate/{key}"),
+		responseCodes("/api/v1/evaluate/{key}"),
+		"both evaluate paths hit the identical handler, so they must document identical status codes")
 }
 
 // TestScalarVersionIsPinned: an unpinned CDN script lets a third party change
