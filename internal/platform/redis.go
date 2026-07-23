@@ -17,7 +17,6 @@ const (
 	redisPingTimeout  = 2 * time.Second
 )
 
-
 func NewRedisClient(addr string) *goredis.Client {
 	opts := &goredis.Options{
 		Addr:         addr,

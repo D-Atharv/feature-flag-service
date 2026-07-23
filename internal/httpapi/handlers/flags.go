@@ -119,7 +119,10 @@ func validateRollout(p int) error {
 func (h *FlagHandler) Create(c *gin.Context) {
 	var req createRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.WriteValidation(c, err)
+		// HandleBindError maps an over-size body (*http.MaxBytesError from the
+		// BodyLimit middleware) to 413; everything else to a 400. Calling
+		// WriteValidation directly here would render the 413 case as a 400.
+		HandleBindError(c, err)
 		return
 	}
 
@@ -154,7 +157,7 @@ func (h *FlagHandler) Create(c *gin.Context) {
 }
 
 // List handles GET /api/v1/flags.
-// Supports ?environment=, ?enabled=, ?limit=, ?cursor= (keyset pagination).
+// Supports ?environment=, ?limit=, ?cursor= (keyset pagination).
 func (h *FlagHandler) List(c *gin.Context) {
 	env := c.Query("environment")
 
@@ -259,7 +262,7 @@ func (h *FlagHandler) Update(c *gin.Context) {
 
 	var req updateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problem.WriteValidation(c, err)
+		HandleBindError(c, err)
 		return
 	}
 	if req.Enabled == nil && req.RolloutPercentage == nil {

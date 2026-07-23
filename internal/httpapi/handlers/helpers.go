@@ -28,8 +28,8 @@ func actorID(c *gin.Context) string {
 	return s
 }
 
-// HandleBindError inspects err from ShouldBindJSON / ShouldBindQuery and
-// renders the appropriate problem response:
+// HandleBindError inspects an error from ShouldBindJSON and renders the
+// appropriate problem response:
 //   - *http.MaxBytesError → 413 Request Entity Too Large
 //   - validator.ValidationErrors → 400 with per-field detail
 //   - anything else → 400 Invalid Input

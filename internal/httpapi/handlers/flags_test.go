@@ -16,6 +16,7 @@ import (
 
 	"github.com/D-Atharv/feature-flag-service/internal/domain"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/handlers"
+	"github.com/D-Atharv/feature-flag-service/internal/httpapi/middleware"
 	"github.com/D-Atharv/feature-flag-service/internal/httpapi/problem"
 )
 
@@ -452,4 +453,34 @@ func TestAllErrors_HaveCorrectContentType(t *testing.T) {
 		assert.NotEmpty(t, p.Type, "type must be set")
 		assert.NotEmpty(t, p.Detail, "detail must be set")
 	}
+}
+
+// TestCreate_OversizeBody_Returns413 proves the BodyLimit middleware's stated
+// contract end-to-end: a request body over the 1 MiB cap must surface as 413,
+// not 400. The bug this guards against: the handler called WriteValidation
+// directly (→ 400) instead of HandleBindError (→ 413), so the BodyLimit
+// middleware's documented behaviour never actually happened.
+func TestCreate_OversizeBody_Returns413(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(middleware.BodyLimit()) // the real middleware, same as main.go
+	v1 := r.Group("/api/v1")
+	handlers.NewFlagHandler(newFakeRepo()).Register(v1)
+
+	// A syntactically valid JSON body that exceeds MaxBodyBytes (1 MiB).
+	big := make([]byte, middleware.MaxBodyBytes+1024)
+	for i := range big {
+		big[i] = 'a'
+	}
+	body := bytes.NewBufferString(`{"key":"x","environment":"prod","description":"` + string(big) + `"}`)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/flags", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code,
+		"an over-size body must be 413, not 400")
+	assert.Equal(t, problem.ContentType, rec.Header().Get("Content-Type"))
 }
