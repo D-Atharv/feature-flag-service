@@ -1,0 +1,56 @@
+# Render Blueprint for the feature flag service.
+#
+# Apply: Render dashboard -> New -> Blueprint -> pick this repo.
+#
+# Known risk, untested against Render specifically: the runtime image
+# (gcr.io/distroless/static-debian12:nonroot) has no shell. If Render wraps
+# preDeployCommand in `sh -c`, this step fails with something like
+# `exec: "/bin/sh": no such file or directory`. First deploy is the test —
+# see docs/DEFENSE.md / the deploy notes for the fallback if it does.
+
+databases:
+  - name: ffs-postgres
+    databaseName: feature_flags
+    user: ffs
+    postgresMajorVersion: "16"
+    plan: basic-256mb # avoid "free" — it expires after 30 days
+
+services:
+  - type: keyvalue
+    name: ffs-keyvalue
+    plan: free
+    ipAllowList: [] # empty = no external access; internal-only by default
+    maxmemoryPolicy: noeviction # buckets carry their own TTL; don't evict them early
+
+  - type: web
+    name: ffs-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Render's Blueprint schema has no field for passing --build-arg to a
+    # Dockerfile (confirmed: dockerBuildArgs is rejected by the validator, and
+    # the docs list no equivalent for Docker-runtime services). VERSION/
+    # GIT_SHA/BUILD_TIME therefore fall back to the Dockerfile's ARG defaults
+    # ("dev"/"unknown"), so GET / will report those instead of the real commit.
+    # Purely cosmetic — every other build-info field (RENDER_GIT_COMMIT etc.)
+    # is still available at runtime via envVars below if this needs fixing
+    # properly later; not worth the Dockerfile rework tonight.
+    plan: starter # NOT free: free web services cold-start (~50s) after idle
+    healthCheckPath: /healthz # liveness only — checks nothing external
+    preDeployCommand: "/app/migrate up"
+    envVars:
+      - key: ENV
+        value: prod
+      - key: LOG_LEVEL
+        value: info
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ffs-postgres
+          property: connectionString # internal URL, sslmode not required internally
+      - key: REDIS_ADDR
+        fromService:
+          type: keyvalue
+          name: ffs-keyvalue
+          property: connectionString # redis://... internal; requires the ParseURL fix
+    # PORT is deliberately absent — Render injects it, and config.Load() just
+    # reads os.Getenv("PORT"). Setting it here would fight Render's router.
